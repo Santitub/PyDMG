@@ -23,7 +23,6 @@ PyDMG/
 ├── requirements.txt          # Dependencias de Python
 ├── setup.py                 # Script de compilación de Cython
 ├── main.py                  # Punto de entrada del emulador
-├── sml.gb                   # ROM de ejemplo (Super Mario Land)
 └── pydmg/                   # Paquete principal del emulador
     ├── __init__.py
     ├── cpu.py               # Implementación de CPU (Python puro)
@@ -81,8 +80,8 @@ python setup.py build_ext --inplace
 ls -la pydmg/*.so  # Linux/macOS
 dir pydmg\*.pyd    # Windows
 
-# Ejecutar con la ROM incluida
-python main.py sml.gb
+# Ejecutar con la ROM que quieras
+python main.py rom.gb
 ```
 
 ### Opciones de Instalación
