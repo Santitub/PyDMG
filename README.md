@@ -12,7 +12,7 @@ Un emulador de Game Boy Classic (DMG) completo y preciso escrito en Python con o
 - **SRAM Persistent**: Guardado automático de RAM externa para cartuchos con batería
 - **Múltiples Paletas**: 4 paletas de color diferentes (DMG, Grayscale, Green, Pocket)
 - **Controles Avanzados**: Modo turbo, pausa, debug mode y reset
-- **Optimizado**: Módulos Cython pre-compilados para Linux x86_64/Python 3.12
+- **Optimizable**: Soporte para compilar con Cython para máximo rendimiento
 
 ## 📁 Estructura del Repositorio
 
@@ -28,10 +28,8 @@ PyDMG/
     ├── __init__.py
     ├── cpu.py               # Implementación de CPU (Python puro)
     ├── cpu.pyx              # Implementación de CPU (Cython fuente)
-    ├── cpu.cpython-312-x86_64-linux-gnu.so  # Módulo compilado (Linux)
     ├── ppu.py               # Implementación de PPU (Python puro)
     ├── ppu.pyx              # Implementación de PPU (Cython fuente)
-    ├── ppu.cpython-312-x86_64-linux-gnu.so  # Módulo compilado (Linux)
     ├── mmu.py               # Memory Management Unit con MBC
     ├── apu.py               # Audio Processing Unit
     ├── timer.py             # Timer del sistema
@@ -42,21 +40,21 @@ PyDMG/
 
 ## ⚠️ Notas Importantes sobre la Estructura
 
-1. **Módulos Cython pre-compilados**: Los archivos `.so` ya están compilados para **Python 3.12 en Linux x86_64**. Si usas otra versión de Python u otro sistema operativo, necesitarás recompilarlos.
+1. **No hay módulos Cython pre-compilados**: Los archivos `.so` **NO están incluidos** en este repositorio. Debes compilarlos manualmente para obtener rendimiento aceptable.
 
-2. **Carpetas faltantes**: Las carpetas `roms/` y `saves/` **no existen** en el repositorio y deben crearse manualmente (ver instrucciones abajo).
+2. **Carpetas dinámicas**: Las carpetas `roms/` y `saves/` deben crearse manualmente (ver instrucciones abajo).
 
-## 🚀 Instalación Rápida
+## 🚀 Instalación y Compilación
 
 ### Requisitos Previos
 
-- **Python 3.7+** (optimizado para 3.12)
+- **Python 3.7+**
 - **SDL2** (librería del sistema)
   - **Ubuntu/Debian**: `sudo apt-get install libsdl2-2.0-0`
   - **macOS**: `brew install sdl2`
   - **Windows**: Descargar desde [libsdl.org](https://github.com/libsdl-org/SDL/releases/tag/release-2.32.10)
 
-### Instalación Básica (Recomendado)
+### Instalación Completa (Obligatoria)
 
 ```bash
 # Clonar el repositorio
@@ -70,31 +68,36 @@ source venv/bin/activate  # En Windows: venv\Scripts\activate
 # Instalar dependencias
 pip install -r requirements.txt
 
-# Verificar que los módulos Cython funcionan
-python -c "from pydmg import GameBoy; print('Módulos Cython cargados correctamente')"
-
-# Ejecutar directamente con la ROM incluida
-python main.py sml.gb
-```
-
-### Recompilación Cython (Solo si es necesario)
-
-Si los módulos `.so` no funcionan en tu sistema:
-
-```bash
-# Instalar Cython y compilador
+# Instalar Cython y compilador C (obligatorio)
 pip install cython
 # Ubuntu/Debian: sudo apt-get install build-essential
 # macOS: xcode-select --install
 # Windows: Instalar Visual Studio Build Tools
 
-# Compilar desde la RAÍZ del proyecto
+# Compilar extensiones Cython desde la RAÍZ del proyecto
 python setup.py build_ext --inplace
 
-# Verificar archivos generados
+# Verificar que se crearon los módulos .so/.pyd
 ls -la pydmg/*.so  # Linux/macOS
 dir pydmg\*.pyd    # Windows
+
+# Ejecutar con la ROM incluida
+python main.py sml.gb
 ```
+
+### Opciones de Instalación
+
+#### **Versión Cython Compilada** (Recomendado, máximo rendimiento)
+- Requiere: Cython + compilador C (GCC/Clang/MSVC)
+- Compilar con: `python setup.py build_ext --inplace`
+- Rendimiento: 60 FPS constantes con overhead mínimo
+- **Este es el modo recomendado para jugar**
+
+#### **Versión Python Pura** (Emergencia, solo si no puedes compilar)
+- Solo instalar dependencias con `pip install -r requirements.txt`
+- No requiere compilador C
+- Rendimiento: ~30-40 FPS en CPU moderna
+- **Usar solo si la compilación falla definitivamente**
 
 ## 📂 Preparar ROMs y Guardados
 
@@ -152,7 +155,7 @@ python main.py roms/tu_juego.gb
 ```
 PySDL2>=0.9.14
 numpy>=1.19.0
-Cython>=0.29.0  # Opcional, solo para recompilar
+Cython>=0.29.0  # Obligatorio para compilar
 ```
 
 ### Archivos de Configuración
@@ -197,9 +200,8 @@ Cython>=0.29.0  # Opcional, solo para recompilar
 
 | Modo | FPS Promedio | Uso CPU | Requisitos |
 |------|--------------|---------|------------|
-| Python puro | 30-40 | 80-100% | Sin archivos `.so` |
-| Cython pre-compilado | 60 estable | 30-50% | Archivos `.so` compatibles |
-| Cython re-compilado | 60 estable | 30-50% | Compilación manual |
+| Python puro | 30-40 | 80-100% | Sin compilar (emergencia) |
+| Cython compilado | 60 estable | 30-50% | Requiere `setup.py build_ext` |
 
 ## 🐛 Solución de Problemas
 
@@ -212,12 +214,22 @@ python -c "import sdl2; print(sdl2.__version__)"
 # El código ya silencia warnings de ALSA automáticamente
 ```
 
-### **Error al cargar módulos Cython**
+### **Error al compilar Cython**
+```bash
+# Verifica que tienes el compilador C instalado
+gcc --version  # Linux/macOS
+
+# En Windows, usa el "x64 Native Tools Command Prompt for VS"
+python setup.py build_ext --inplace
+```
+
+### **Error al cargar módulos después de compilar**
 ```bash
 # Si aparece "no module named 'pydmg.cpu'":
 # 1. Verifica que estás en el directorio raíz del proyecto
 # 2. Reinstala las dependencias: pip install -r requirements.txt
-# 3. Si persiste, recompila: python setup.py build_ext --inplace
+# 3. Recompila de nuevo: python setup.py build_ext --inplace
+# 4. Verifica que se crearon los archivos .so/.pyd en pydmg/
 ```
 
 ### **Audio con chasquidos**
@@ -225,9 +237,9 @@ python -c "import sdl2; print(sdl2.__version__)"
 - Verificar `BUFFER_SAMPLES = 512` (puede aumentarse si hay lag)
 
 ### **Render lento**
-- **Solución 1**: Usa los módulos Cython pre-compilados
-- **Solución 2**: Recompila manualmente si no son compatibles
-- **Solución 3**: Activa turbo con `Space`
+- **Solución 1**: Asegúrate de haber compilado los módulos Cython
+- **Solución 2**: Verifica que los archivos `.so` existen en `pydmg/`
+- **Solución 3**: Activa turbo con `Space` o cierra otras aplicaciones
 
 ## 🤝 Contribuciones
 
