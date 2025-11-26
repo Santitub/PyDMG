@@ -30,8 +30,10 @@ PyDMG/
     ├── ppu.py               # Implementación de PPU (Python puro)
     ├── ppu.pyx              # Implementación de PPU (Cython fuente)
     ├── mmu.py               # Memory Management Unit con MBC
-    ├── apu.py               # Audio Processing Unit
-    ├── timer.py             # Timer del sistema
+    ├── apu.py               # Audio Processing Unit (Python puro)
+    ├── apu.pyx              # Audio Processing Unit (Cython fuente)
+    ├── timer.py             # Timer del sistema (Python puro)
+    ├── timer.pyx            # Timer del sistema (Cython fuente)
     ├── joypad.py            # Manejo de entrada
     ├── savestate.py         # Sistema de save states
     ├── gameboy.py           # Clase principal del sistema
