@@ -15,6 +15,18 @@ extensions = [
         include_dirs=[np.get_include()],
         extra_compile_args=["-O3", "-ffast-math"],
     ),
+    Extension(
+        "pydmg.apu",
+        ["pydmg/apu.pyx"],
+        include_dirs=[np.get_include()],
+        extra_compile_args=["-O3", "-ffast-math"],
+    ),
+    Extension(
+        "pydmg.timer",
+        ["pydmg/timer.pyx"],
+        include_dirs=[np.get_include()],
+        extra_compile_args=["-O3", "-ffast-math"],
+    )
 ]
 
 setup(

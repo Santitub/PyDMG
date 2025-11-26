@@ -1,7 +1,5 @@
-# apu.py
-"""
-Audio Processing Unit - Estilo PyBoy
-Usa SDL_QueueAudio en lugar de callbacks para mejor rendimiento
+""""
+Audio Processing Unit
 """
 
 import ctypes
