@@ -1,11 +1,12 @@
 """
-CPU Sharp LR35902
+CPU Sharp LR35902 - Optimizado con dispatch table
 """
 
 class CPU:
     __slots__ = (
         'mmu', 'a', 'b', 'c', 'd', 'e', 'f', 'h', 'l',
-        'sp', 'pc', 'halted', 'ime', 'ime_next', 'cycles'
+        'sp', 'pc', 'halted', 'ime', 'ime_next',
+        '_ops', '_cb_ops'
     )
     
     def __init__(self, mmu):
@@ -23,10 +24,13 @@ class CPU:
         self.halted = False
         self.ime = False
         self.ime_next = False
-        self.cycles = 0
+        
+        # Construir tablas de dispatch
+        self._ops = self._build_ops()
+        self._cb_ops = self._build_cb_ops()
     
     def step(self):
-        # Inline interrupt check
+        # Interrupciones
         if self.ime:
             ie = self.mmu.ie
             if_reg = self.mmu.io[0x0F]
@@ -48,14 +52,10 @@ class CPU:
                 self.halted = False
             return 4
         
-        # Fetch
-        mmu = self.mmu
-        pc = self.pc
-        op = mmu.read(pc)
-        self.pc = (pc + 1) & 0xFFFF
-        
-        # Execute - inline para velocidad
-        cycles = self._execute(op)
+        # Fetch & Execute
+        op = self.mmu.read(self.pc)
+        self.pc = (self.pc + 1) & 0xFFFF
+        cycles = self._ops[op]()
         
         if self.ime_next:
             self.ime = True
@@ -63,70 +63,84 @@ class CPU:
         
         return cycles
     
-    def _execute(self, op):
-        """Ejecuta opcode - optimizado"""
-        mmu = self.mmu
+    def _build_ops(self):
+        """Construye tabla de 256 handlers"""
+        ops = [lambda: 4] * 256  # Default: NOP
         
-        # NOP
-        if op == 0x00:
-            return 4
+        # Helpers inline
+        def inc8(v):
+            r = (v + 1) & 0xFF
+            self.f = (self.f & 0x10) | (0x80 if r == 0 else 0) | (0x20 if (v & 0xF) == 0xF else 0)
+            return r
         
-        # LD BC,nn
-        elif op == 0x01:
-            self.c = mmu.read(self.pc)
-            self.b = mmu.read(self.pc + 1)
+        def dec8(v):
+            r = (v - 1) & 0xFF
+            self.f = (self.f & 0x10) | 0x40 | (0x80 if r == 0 else 0) | (0x20 if (v & 0xF) == 0 else 0)
+            return r
+        
+        # 0x00 NOP
+        ops[0x00] = lambda: 4
+        
+        # 0x01 LD BC,nn
+        def op_01():
+            self.c = self.mmu.read(self.pc)
+            self.b = self.mmu.read(self.pc + 1)
             self.pc = (self.pc + 2) & 0xFFFF
             return 12
+        ops[0x01] = op_01
         
-        # LD (BC),A
-        elif op == 0x02:
-            mmu.write((self.b << 8) | self.c, self.a)
+        # 0x02 LD (BC),A
+        def op_02():
+            self.mmu.write((self.b << 8) | self.c, self.a)
             return 8
+        ops[0x02] = op_02
         
-        # INC BC
-        elif op == 0x03:
+        # 0x03 INC BC
+        def op_03():
             bc = ((self.b << 8) | self.c) + 1
             self.b = (bc >> 8) & 0xFF
             self.c = bc & 0xFF
             return 8
+        ops[0x03] = op_03
         
-        # INC B
-        elif op == 0x04:
-            r = (self.b + 1) & 0xFF
-            self.f = (self.f & 0x10) | (0x80 if r == 0 else 0) | (0x20 if (self.b & 0xF) == 0xF else 0)
-            self.b = r
+        # 0x04 INC B
+        def op_04():
+            self.b = inc8(self.b)
             return 4
+        ops[0x04] = op_04
         
-        # DEC B
-        elif op == 0x05:
-            r = (self.b - 1) & 0xFF
-            self.f = (self.f & 0x10) | 0x40 | (0x80 if r == 0 else 0) | (0x20 if (self.b & 0xF) == 0 else 0)
-            self.b = r
+        # 0x05 DEC B
+        def op_05():
+            self.b = dec8(self.b)
             return 4
+        ops[0x05] = op_05
         
-        # LD B,n
-        elif op == 0x06:
-            self.b = mmu.read(self.pc)
+        # 0x06 LD B,n
+        def op_06():
+            self.b = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             return 8
+        ops[0x06] = op_06
         
-        # RLCA
-        elif op == 0x07:
+        # 0x07 RLCA
+        def op_07():
             c = self.a >> 7
             self.a = ((self.a << 1) | c) & 0xFF
             self.f = c << 4
             return 4
+        ops[0x07] = op_07
         
-        # LD (nn),SP
-        elif op == 0x08:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0x08 LD (nn),SP
+        def op_08():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
-            mmu.write(addr, self.sp & 0xFF)
-            mmu.write(addr + 1, self.sp >> 8)
+            self.mmu.write(addr, self.sp & 0xFF)
+            self.mmu.write(addr + 1, self.sp >> 8)
             return 20
+        ops[0x08] = op_08
         
-        # ADD HL,BC
-        elif op == 0x09:
+        # 0x09 ADD HL,BC
+        def op_09():
             hl = (self.h << 8) | self.l
             bc = (self.b << 8) | self.c
             r = hl + bc
@@ -134,108 +148,116 @@ class CPU:
             self.h = (r >> 8) & 0xFF
             self.l = r & 0xFF
             return 8
+        ops[0x09] = op_09
         
-        # LD A,(BC)
-        elif op == 0x0A:
-            self.a = mmu.read((self.b << 8) | self.c)
+        # 0x0A LD A,(BC)
+        def op_0A():
+            self.a = self.mmu.read((self.b << 8) | self.c)
             return 8
+        ops[0x0A] = op_0A
         
-        # DEC BC
-        elif op == 0x0B:
+        # 0x0B DEC BC
+        def op_0B():
             bc = (((self.b << 8) | self.c) - 1) & 0xFFFF
             self.b = bc >> 8
             self.c = bc & 0xFF
             return 8
+        ops[0x0B] = op_0B
         
-        # INC C
-        elif op == 0x0C:
-            r = (self.c + 1) & 0xFF
-            self.f = (self.f & 0x10) | (0x80 if r == 0 else 0) | (0x20 if (self.c & 0xF) == 0xF else 0)
-            self.c = r
+        # 0x0C INC C
+        def op_0C():
+            self.c = inc8(self.c)
             return 4
+        ops[0x0C] = op_0C
         
-        # DEC C
-        elif op == 0x0D:
-            r = (self.c - 1) & 0xFF
-            self.f = (self.f & 0x10) | 0x40 | (0x80 if r == 0 else 0) | (0x20 if (self.c & 0xF) == 0 else 0)
-            self.c = r
+        # 0x0D DEC C
+        def op_0D():
+            self.c = dec8(self.c)
             return 4
+        ops[0x0D] = op_0D
         
-        # LD C,n
-        elif op == 0x0E:
-            self.c = mmu.read(self.pc)
+        # 0x0E LD C,n
+        def op_0E():
+            self.c = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             return 8
+        ops[0x0E] = op_0E
         
-        # RRCA
-        elif op == 0x0F:
+        # 0x0F RRCA
+        def op_0F():
             c = self.a & 1
             self.a = (self.a >> 1) | (c << 7)
             self.f = c << 4
             return 4
+        ops[0x0F] = op_0F
         
-        # STOP
-        elif op == 0x10:
+        # 0x10 STOP
+        def op_10():
             self.pc = (self.pc + 1) & 0xFFFF
             return 4
+        ops[0x10] = op_10
         
-        # LD DE,nn
-        elif op == 0x11:
-            self.e = mmu.read(self.pc)
-            self.d = mmu.read(self.pc + 1)
+        # 0x11 LD DE,nn
+        def op_11():
+            self.e = self.mmu.read(self.pc)
+            self.d = self.mmu.read(self.pc + 1)
             self.pc = (self.pc + 2) & 0xFFFF
             return 12
+        ops[0x11] = op_11
         
-        # LD (DE),A
-        elif op == 0x12:
-            mmu.write((self.d << 8) | self.e, self.a)
+        # 0x12 LD (DE),A
+        def op_12():
+            self.mmu.write((self.d << 8) | self.e, self.a)
             return 8
+        ops[0x12] = op_12
         
-        # INC DE
-        elif op == 0x13:
+        # 0x13 INC DE
+        def op_13():
             de = ((self.d << 8) | self.e) + 1
             self.d = (de >> 8) & 0xFF
             self.e = de & 0xFF
             return 8
+        ops[0x13] = op_13
         
-        # INC D
-        elif op == 0x14:
-            r = (self.d + 1) & 0xFF
-            self.f = (self.f & 0x10) | (0x80 if r == 0 else 0) | (0x20 if (self.d & 0xF) == 0xF else 0)
-            self.d = r
+        # 0x14 INC D
+        def op_14():
+            self.d = inc8(self.d)
             return 4
+        ops[0x14] = op_14
         
-        # DEC D
-        elif op == 0x15:
-            r = (self.d - 1) & 0xFF
-            self.f = (self.f & 0x10) | 0x40 | (0x80 if r == 0 else 0) | (0x20 if (self.d & 0xF) == 0 else 0)
-            self.d = r
+        # 0x15 DEC D
+        def op_15():
+            self.d = dec8(self.d)
             return 4
+        ops[0x15] = op_15
         
-        # LD D,n
-        elif op == 0x16:
-            self.d = mmu.read(self.pc)
+        # 0x16 LD D,n
+        def op_16():
+            self.d = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             return 8
+        ops[0x16] = op_16
         
-        # RLA
-        elif op == 0x17:
+        # 0x17 RLA
+        def op_17():
             c = self.a >> 7
             self.a = ((self.a << 1) | ((self.f >> 4) & 1)) & 0xFF
             self.f = c << 4
             return 4
+        ops[0x17] = op_17
         
-        # JR n
-        elif op == 0x18:
-            offset = mmu.read(self.pc)
+        # 0x18 JR n
+        def op_18():
+            offset = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             if offset > 127:
                 offset -= 256
             self.pc = (self.pc + offset) & 0xFFFF
             return 12
+        ops[0x18] = op_18
         
-        # ADD HL,DE
-        elif op == 0x19:
+        # 0x19 ADD HL,DE
+        def op_19():
             hl = (self.h << 8) | self.l
             de = (self.d << 8) | self.e
             r = hl + de
@@ -243,49 +265,52 @@ class CPU:
             self.h = (r >> 8) & 0xFF
             self.l = r & 0xFF
             return 8
+        ops[0x19] = op_19
         
-        # LD A,(DE)
-        elif op == 0x1A:
-            self.a = mmu.read((self.d << 8) | self.e)
+        # 0x1A LD A,(DE)
+        def op_1A():
+            self.a = self.mmu.read((self.d << 8) | self.e)
             return 8
+        ops[0x1A] = op_1A
         
-        # DEC DE
-        elif op == 0x1B:
+        # 0x1B DEC DE
+        def op_1B():
             de = (((self.d << 8) | self.e) - 1) & 0xFFFF
             self.d = de >> 8
             self.e = de & 0xFF
             return 8
+        ops[0x1B] = op_1B
         
-        # INC E
-        elif op == 0x1C:
-            r = (self.e + 1) & 0xFF
-            self.f = (self.f & 0x10) | (0x80 if r == 0 else 0) | (0x20 if (self.e & 0xF) == 0xF else 0)
-            self.e = r
+        # 0x1C INC E
+        def op_1C():
+            self.e = inc8(self.e)
             return 4
+        ops[0x1C] = op_1C
         
-        # DEC E
-        elif op == 0x1D:
-            r = (self.e - 1) & 0xFF
-            self.f = (self.f & 0x10) | 0x40 | (0x80 if r == 0 else 0) | (0x20 if (self.e & 0xF) == 0 else 0)
-            self.e = r
+        # 0x1D DEC E
+        def op_1D():
+            self.e = dec8(self.e)
             return 4
+        ops[0x1D] = op_1D
         
-        # LD E,n
-        elif op == 0x1E:
-            self.e = mmu.read(self.pc)
+        # 0x1E LD E,n
+        def op_1E():
+            self.e = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             return 8
+        ops[0x1E] = op_1E
         
-        # RRA
-        elif op == 0x1F:
+        # 0x1F RRA
+        def op_1F():
             c = self.a & 1
             self.a = (self.a >> 1) | ((self.f << 3) & 0x80)
             self.f = c << 4
             return 4
+        ops[0x1F] = op_1F
         
-        # JR NZ,n
-        elif op == 0x20:
-            offset = mmu.read(self.pc)
+        # 0x20 JR NZ,n
+        def op_20():
+            offset = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             if not (self.f & 0x80):
                 if offset > 127:
@@ -293,52 +318,55 @@ class CPU:
                 self.pc = (self.pc + offset) & 0xFFFF
                 return 12
             return 8
+        ops[0x20] = op_20
         
-        # LD HL,nn
-        elif op == 0x21:
-            self.l = mmu.read(self.pc)
-            self.h = mmu.read(self.pc + 1)
+        # 0x21 LD HL,nn
+        def op_21():
+            self.l = self.mmu.read(self.pc)
+            self.h = self.mmu.read(self.pc + 1)
             self.pc = (self.pc + 2) & 0xFFFF
             return 12
+        ops[0x21] = op_21
         
-        # LDI (HL),A
-        elif op == 0x22:
+        # 0x22 LDI (HL),A
+        def op_22():
             hl = (self.h << 8) | self.l
-            mmu.write(hl, self.a)
+            self.mmu.write(hl, self.a)
             hl = (hl + 1) & 0xFFFF
             self.h = hl >> 8
             self.l = hl & 0xFF
             return 8
+        ops[0x22] = op_22
         
-        # INC HL
-        elif op == 0x23:
+        # 0x23 INC HL
+        def op_23():
             hl = ((self.h << 8) | self.l) + 1
             self.h = (hl >> 8) & 0xFF
             self.l = hl & 0xFF
             return 8
+        ops[0x23] = op_23
         
-        # INC H
-        elif op == 0x24:
-            r = (self.h + 1) & 0xFF
-            self.f = (self.f & 0x10) | (0x80 if r == 0 else 0) | (0x20 if (self.h & 0xF) == 0xF else 0)
-            self.h = r
+        # 0x24 INC H
+        def op_24():
+            self.h = inc8(self.h)
             return 4
+        ops[0x24] = op_24
         
-        # DEC H
-        elif op == 0x25:
-            r = (self.h - 1) & 0xFF
-            self.f = (self.f & 0x10) | 0x40 | (0x80 if r == 0 else 0) | (0x20 if (self.h & 0xF) == 0 else 0)
-            self.h = r
+        # 0x25 DEC H
+        def op_25():
+            self.h = dec8(self.h)
             return 4
+        ops[0x25] = op_25
         
-        # LD H,n
-        elif op == 0x26:
-            self.h = mmu.read(self.pc)
+        # 0x26 LD H,n
+        def op_26():
+            self.h = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             return 8
+        ops[0x26] = op_26
         
-        # DAA
-        elif op == 0x27:
+        # 0x27 DAA
+        def op_27():
             a = self.a
             if self.f & 0x40:
                 if self.f & 0x10:
@@ -354,10 +382,11 @@ class CPU:
             self.a = a
             self.f = (self.f & 0x50) | (0x80 if a == 0 else 0)
             return 4
+        ops[0x27] = op_27
         
-        # JR Z,n
-        elif op == 0x28:
-            offset = mmu.read(self.pc)
+        # 0x28 JR Z,n
+        def op_28():
+            offset = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             if self.f & 0x80:
                 if offset > 127:
@@ -365,61 +394,65 @@ class CPU:
                 self.pc = (self.pc + offset) & 0xFFFF
                 return 12
             return 8
+        ops[0x28] = op_28
         
-        # ADD HL,HL
-        elif op == 0x29:
+        # 0x29 ADD HL,HL
+        def op_29():
             hl = (self.h << 8) | self.l
             r = hl + hl
             self.f = (self.f & 0x80) | (0x20 if (hl & 0xFFF) * 2 > 0xFFF else 0) | (0x10 if r > 0xFFFF else 0)
             self.h = (r >> 8) & 0xFF
             self.l = r & 0xFF
             return 8
+        ops[0x29] = op_29
         
-        # LDI A,(HL)
-        elif op == 0x2A:
+        # 0x2A LDI A,(HL)
+        def op_2A():
             hl = (self.h << 8) | self.l
-            self.a = mmu.read(hl)
+            self.a = self.mmu.read(hl)
             hl = (hl + 1) & 0xFFFF
             self.h = hl >> 8
             self.l = hl & 0xFF
             return 8
+        ops[0x2A] = op_2A
         
-        # DEC HL
-        elif op == 0x2B:
+        # 0x2B DEC HL
+        def op_2B():
             hl = (((self.h << 8) | self.l) - 1) & 0xFFFF
             self.h = hl >> 8
             self.l = hl & 0xFF
             return 8
+        ops[0x2B] = op_2B
         
-        # INC L
-        elif op == 0x2C:
-            r = (self.l + 1) & 0xFF
-            self.f = (self.f & 0x10) | (0x80 if r == 0 else 0) | (0x20 if (self.l & 0xF) == 0xF else 0)
-            self.l = r
+        # 0x2C INC L
+        def op_2C():
+            self.l = inc8(self.l)
             return 4
+        ops[0x2C] = op_2C
         
-        # DEC L
-        elif op == 0x2D:
-            r = (self.l - 1) & 0xFF
-            self.f = (self.f & 0x10) | 0x40 | (0x80 if r == 0 else 0) | (0x20 if (self.l & 0xF) == 0 else 0)
-            self.l = r
+        # 0x2D DEC L
+        def op_2D():
+            self.l = dec8(self.l)
             return 4
+        ops[0x2D] = op_2D
         
-        # LD L,n
-        elif op == 0x2E:
-            self.l = mmu.read(self.pc)
+        # 0x2E LD L,n
+        def op_2E():
+            self.l = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             return 8
+        ops[0x2E] = op_2E
         
-        # CPL
-        elif op == 0x2F:
+        # 0x2F CPL
+        def op_2F():
             self.a ^= 0xFF
             self.f |= 0x60
             return 4
+        ops[0x2F] = op_2F
         
-        # JR NC,n
-        elif op == 0x30:
-            offset = mmu.read(self.pc)
+        # 0x30 JR NC,n
+        def op_30():
+            offset = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             if not (self.f & 0x10):
                 if offset > 127:
@@ -427,59 +460,63 @@ class CPU:
                 self.pc = (self.pc + offset) & 0xFFFF
                 return 12
             return 8
+        ops[0x30] = op_30
         
-        # LD SP,nn
-        elif op == 0x31:
-            self.sp = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0x31 LD SP,nn
+        def op_31():
+            self.sp = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
             return 12
+        ops[0x31] = op_31
         
-        # LDD (HL),A
-        elif op == 0x32:
+        # 0x32 LDD (HL),A
+        def op_32():
             hl = (self.h << 8) | self.l
-            mmu.write(hl, self.a)
+            self.mmu.write(hl, self.a)
             hl = (hl - 1) & 0xFFFF
             self.h = hl >> 8
             self.l = hl & 0xFF
             return 8
+        ops[0x32] = op_32
         
-        # INC SP
-        elif op == 0x33:
+        # 0x33 INC SP
+        def op_33():
             self.sp = (self.sp + 1) & 0xFFFF
             return 8
+        ops[0x33] = op_33
         
-        # INC (HL)
-        elif op == 0x34:
+        # 0x34 INC (HL)
+        def op_34():
             hl = (self.h << 8) | self.l
-            v = mmu.read(hl)
-            r = (v + 1) & 0xFF
-            self.f = (self.f & 0x10) | (0x80 if r == 0 else 0) | (0x20 if (v & 0xF) == 0xF else 0)
-            mmu.write(hl, r)
+            v = self.mmu.read(hl)
+            self.mmu.write(hl, inc8(v))
             return 12
+        ops[0x34] = op_34
         
-        # DEC (HL)
-        elif op == 0x35:
+        # 0x35 DEC (HL)
+        def op_35():
             hl = (self.h << 8) | self.l
-            v = mmu.read(hl)
-            r = (v - 1) & 0xFF
-            self.f = (self.f & 0x10) | 0x40 | (0x80 if r == 0 else 0) | (0x20 if (v & 0xF) == 0 else 0)
-            mmu.write(hl, r)
+            v = self.mmu.read(hl)
+            self.mmu.write(hl, dec8(v))
             return 12
+        ops[0x35] = op_35
         
-        # LD (HL),n
-        elif op == 0x36:
-            mmu.write((self.h << 8) | self.l, mmu.read(self.pc))
+        # 0x36 LD (HL),n
+        def op_36():
+            self.mmu.write((self.h << 8) | self.l, self.mmu.read(self.pc))
             self.pc = (self.pc + 1) & 0xFFFF
             return 12
+        ops[0x36] = op_36
         
-        # SCF
-        elif op == 0x37:
+        # 0x37 SCF
+        def op_37():
             self.f = (self.f & 0x80) | 0x10
             return 4
+        ops[0x37] = op_37
         
-        # JR C,n
-        elif op == 0x38:
-            offset = mmu.read(self.pc)
+        # 0x38 JR C,n
+        def op_38():
+            offset = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             if self.f & 0x10:
                 if offset > 127:
@@ -487,355 +524,530 @@ class CPU:
                 self.pc = (self.pc + offset) & 0xFFFF
                 return 12
             return 8
+        ops[0x38] = op_38
         
-        # ADD HL,SP
-        elif op == 0x39:
+        # 0x39 ADD HL,SP
+        def op_39():
             hl = (self.h << 8) | self.l
             r = hl + self.sp
             self.f = (self.f & 0x80) | (0x20 if (hl & 0xFFF) + (self.sp & 0xFFF) > 0xFFF else 0) | (0x10 if r > 0xFFFF else 0)
             self.h = (r >> 8) & 0xFF
             self.l = r & 0xFF
             return 8
+        ops[0x39] = op_39
         
-        # LDD A,(HL)
-        elif op == 0x3A:
+        # 0x3A LDD A,(HL)
+        def op_3A():
             hl = (self.h << 8) | self.l
-            self.a = mmu.read(hl)
+            self.a = self.mmu.read(hl)
             hl = (hl - 1) & 0xFFFF
             self.h = hl >> 8
             self.l = hl & 0xFF
             return 8
+        ops[0x3A] = op_3A
         
-        # DEC SP
-        elif op == 0x3B:
+        # 0x3B DEC SP
+        def op_3B():
             self.sp = (self.sp - 1) & 0xFFFF
             return 8
+        ops[0x3B] = op_3B
         
-        # INC A
-        elif op == 0x3C:
-            r = (self.a + 1) & 0xFF
-            self.f = (self.f & 0x10) | (0x80 if r == 0 else 0) | (0x20 if (self.a & 0xF) == 0xF else 0)
-            self.a = r
+        # 0x3C INC A
+        def op_3C():
+            self.a = inc8(self.a)
             return 4
+        ops[0x3C] = op_3C
         
-        # DEC A
-        elif op == 0x3D:
-            r = (self.a - 1) & 0xFF
-            self.f = (self.f & 0x10) | 0x40 | (0x80 if r == 0 else 0) | (0x20 if (self.a & 0xF) == 0 else 0)
-            self.a = r
+        # 0x3D DEC A
+        def op_3D():
+            self.a = dec8(self.a)
             return 4
+        ops[0x3D] = op_3D
         
-        # LD A,n
-        elif op == 0x3E:
-            self.a = mmu.read(self.pc)
+        # 0x3E LD A,n
+        def op_3E():
+            self.a = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             return 8
+        ops[0x3E] = op_3E
         
-        # CCF
-        elif op == 0x3F:
+        # 0x3F CCF
+        def op_3F():
             self.f = (self.f & 0x80) | ((self.f ^ 0x10) & 0x10)
             return 4
+        ops[0x3F] = op_3F
         
-        # LD B,B - LD A,A (0x40-0x7F excepto 0x76)
-        elif 0x40 <= op <= 0x7F:
-            if op == 0x76:  # HALT
-                self.halted = True
-                return 4
-            return self._ld_r_r(op)
+        # LD r,r (0x40-0x7F) excepto HALT
+        regs_get = [
+            lambda: self.b, lambda: self.c, lambda: self.d, lambda: self.e,
+            lambda: self.h, lambda: self.l, lambda: self.mmu.read((self.h << 8) | self.l), lambda: self.a
+        ]
         
-        # ADD/ADC/SUB/SBC/AND/XOR/OR/CP (0x80-0xBF)
-        elif 0x80 <= op <= 0xBF:
-            return self._alu(op)
+        def make_ld_rr(dst, src):
+            if dst == 6:  # (HL)
+                def op():
+                    self.mmu.write((self.h << 8) | self.l, regs_get[src]())
+                    return 8
+            elif src == 6:  # (HL)
+                if dst == 0:
+                    def op():
+                        self.b = self.mmu.read((self.h << 8) | self.l)
+                        return 8
+                elif dst == 1:
+                    def op():
+                        self.c = self.mmu.read((self.h << 8) | self.l)
+                        return 8
+                elif dst == 2:
+                    def op():
+                        self.d = self.mmu.read((self.h << 8) | self.l)
+                        return 8
+                elif dst == 3:
+                    def op():
+                        self.e = self.mmu.read((self.h << 8) | self.l)
+                        return 8
+                elif dst == 4:
+                    def op():
+                        self.h = self.mmu.read((self.h << 8) | self.l)
+                        return 8
+                elif dst == 5:
+                    def op():
+                        self.l = self.mmu.read((self.h << 8) | self.l)
+                        return 8
+                else:
+                    def op():
+                        self.a = self.mmu.read((self.h << 8) | self.l)
+                        return 8
+            else:
+                if dst == 0:
+                    def op():
+                        self.b = regs_get[src]()
+                        return 4
+                elif dst == 1:
+                    def op():
+                        self.c = regs_get[src]()
+                        return 4
+                elif dst == 2:
+                    def op():
+                        self.d = regs_get[src]()
+                        return 4
+                elif dst == 3:
+                    def op():
+                        self.e = regs_get[src]()
+                        return 4
+                elif dst == 4:
+                    def op():
+                        self.h = regs_get[src]()
+                        return 4
+                elif dst == 5:
+                    def op():
+                        self.l = regs_get[src]()
+                        return 4
+                else:
+                    def op():
+                        self.a = regs_get[src]()
+                        return 4
+            return op
         
-        # RET NZ
-        elif op == 0xC0:
+        for opcode in range(0x40, 0x80):
+            if opcode == 0x76:  # HALT
+                def op_halt():
+                    self.halted = True
+                    return 4
+                ops[0x76] = op_halt
+            else:
+                dst = (opcode >> 3) & 7
+                src = opcode & 7
+                ops[opcode] = make_ld_rr(dst, src)
+        
+        # ALU ops (0x80-0xBF)
+        def make_alu(alu_op, src):
+            get_val = regs_get[src]
+            cycles = 8 if src == 6 else 4
+            
+            if alu_op == 0:  # ADD
+                def op():
+                    v = get_val()
+                    r = self.a + v
+                    self.f = (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (self.a & 0xF) + (v & 0xF) > 0xF else 0) | (0x10 if r > 0xFF else 0)
+                    self.a = r & 0xFF
+                    return cycles
+            elif alu_op == 1:  # ADC
+                def op():
+                    v = get_val()
+                    c = (self.f >> 4) & 1
+                    r = self.a + v + c
+                    self.f = (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (self.a & 0xF) + (v & 0xF) + c > 0xF else 0) | (0x10 if r > 0xFF else 0)
+                    self.a = r & 0xFF
+                    return cycles
+            elif alu_op == 2:  # SUB
+                def op():
+                    v = get_val()
+                    r = self.a - v
+                    self.f = 0x40 | (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (self.a & 0xF) < (v & 0xF) else 0) | (0x10 if r < 0 else 0)
+                    self.a = r & 0xFF
+                    return cycles
+            elif alu_op == 3:  # SBC
+                def op():
+                    v = get_val()
+                    c = (self.f >> 4) & 1
+                    r = self.a - v - c
+                    self.f = 0x40 | (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (self.a & 0xF) < (v & 0xF) + c else 0) | (0x10 if r < 0 else 0)
+                    self.a = r & 0xFF
+                    return cycles
+            elif alu_op == 4:  # AND
+                def op():
+                    self.a &= get_val()
+                    self.f = 0x20 | (0x80 if self.a == 0 else 0)
+                    return cycles
+            elif alu_op == 5:  # XOR
+                def op():
+                    self.a ^= get_val()
+                    self.f = 0x80 if self.a == 0 else 0
+                    return cycles
+            elif alu_op == 6:  # OR
+                def op():
+                    self.a |= get_val()
+                    self.f = 0x80 if self.a == 0 else 0
+                    return cycles
+            else:  # CP
+                def op():
+                    v = get_val()
+                    r = self.a - v
+                    self.f = 0x40 | (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (self.a & 0xF) < (v & 0xF) else 0) | (0x10 if r < 0 else 0)
+                    return cycles
+            return op
+        
+        for opcode in range(0x80, 0xC0):
+            alu_op = (opcode >> 3) & 7
+            src = opcode & 7
+            ops[opcode] = make_alu(alu_op, src)
+        
+        # 0xC0 RET NZ
+        def op_C0():
             if not (self.f & 0x80):
-                self.pc = mmu.read(self.sp) | (mmu.read(self.sp + 1) << 8)
+                self.pc = self.mmu.read(self.sp) | (self.mmu.read(self.sp + 1) << 8)
                 self.sp = (self.sp + 2) & 0xFFFF
                 return 20
             return 8
+        ops[0xC0] = op_C0
         
-        # POP BC
-        elif op == 0xC1:
-            self.c = mmu.read(self.sp)
-            self.b = mmu.read(self.sp + 1)
+        # 0xC1 POP BC
+        def op_C1():
+            self.c = self.mmu.read(self.sp)
+            self.b = self.mmu.read(self.sp + 1)
             self.sp = (self.sp + 2) & 0xFFFF
             return 12
+        ops[0xC1] = op_C1
         
-        # JP NZ,nn
-        elif op == 0xC2:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xC2 JP NZ,nn
+        def op_C2():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
             if not (self.f & 0x80):
                 self.pc = addr
                 return 16
             return 12
+        ops[0xC2] = op_C2
         
-        # JP nn
-        elif op == 0xC3:
-            self.pc = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xC3 JP nn
+        def op_C3():
+            self.pc = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             return 16
+        ops[0xC3] = op_C3
         
-        # CALL NZ,nn
-        elif op == 0xC4:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xC4 CALL NZ,nn
+        def op_C4():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
             if not (self.f & 0x80):
                 self.sp = (self.sp - 2) & 0xFFFF
-                mmu.write(self.sp, self.pc & 0xFF)
-                mmu.write(self.sp + 1, self.pc >> 8)
+                self.mmu.write(self.sp, self.pc & 0xFF)
+                self.mmu.write(self.sp + 1, self.pc >> 8)
                 self.pc = addr
                 return 24
             return 12
+        ops[0xC4] = op_C4
         
-        # PUSH BC
-        elif op == 0xC5:
+        # 0xC5 PUSH BC
+        def op_C5():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.c)
-            mmu.write(self.sp + 1, self.b)
+            self.mmu.write(self.sp, self.c)
+            self.mmu.write(self.sp + 1, self.b)
             return 16
+        ops[0xC5] = op_C5
         
-        # ADD A,n
-        elif op == 0xC6:
-            n = mmu.read(self.pc)
+        # 0xC6 ADD A,n
+        def op_C6():
+            n = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             r = self.a + n
             self.f = (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (self.a & 0xF) + (n & 0xF) > 0xF else 0) | (0x10 if r > 0xFF else 0)
             self.a = r & 0xFF
             return 8
+        ops[0xC6] = op_C6
         
-        # RST 00
-        elif op == 0xC7:
+        # 0xC7 RST 00
+        def op_C7():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.pc & 0xFF)
-            mmu.write(self.sp + 1, self.pc >> 8)
+            self.mmu.write(self.sp, self.pc & 0xFF)
+            self.mmu.write(self.sp + 1, self.pc >> 8)
             self.pc = 0x00
             return 16
+        ops[0xC7] = op_C7
         
-        # RET Z
-        elif op == 0xC8:
+        # 0xC8 RET Z
+        def op_C8():
             if self.f & 0x80:
-                self.pc = mmu.read(self.sp) | (mmu.read(self.sp + 1) << 8)
+                self.pc = self.mmu.read(self.sp) | (self.mmu.read(self.sp + 1) << 8)
                 self.sp = (self.sp + 2) & 0xFFFF
                 return 20
             return 8
+        ops[0xC8] = op_C8
         
-        # RET
-        elif op == 0xC9:
-            self.pc = mmu.read(self.sp) | (mmu.read(self.sp + 1) << 8)
+        # 0xC9 RET
+        def op_C9():
+            self.pc = self.mmu.read(self.sp) | (self.mmu.read(self.sp + 1) << 8)
             self.sp = (self.sp + 2) & 0xFFFF
             return 16
+        ops[0xC9] = op_C9
         
-        # JP Z,nn
-        elif op == 0xCA:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xCA JP Z,nn
+        def op_CA():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
             if self.f & 0x80:
                 self.pc = addr
                 return 16
             return 12
+        ops[0xCA] = op_CA
         
-        # CB prefix
-        elif op == 0xCB:
-            return self._cb(mmu.read(self.pc))
+        # 0xCB - CB prefix
+        def op_CB():
+            cb_op = self.mmu.read(self.pc)
+            self.pc = (self.pc + 1) & 0xFFFF
+            return self._cb_ops[cb_op]()
+        ops[0xCB] = op_CB
         
-        # CALL Z,nn
-        elif op == 0xCC:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xCC CALL Z,nn
+        def op_CC():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
             if self.f & 0x80:
                 self.sp = (self.sp - 2) & 0xFFFF
-                mmu.write(self.sp, self.pc & 0xFF)
-                mmu.write(self.sp + 1, self.pc >> 8)
+                self.mmu.write(self.sp, self.pc & 0xFF)
+                self.mmu.write(self.sp + 1, self.pc >> 8)
                 self.pc = addr
                 return 24
             return 12
+        ops[0xCC] = op_CC
         
-        # CALL nn
-        elif op == 0xCD:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xCD CALL nn
+        def op_CD():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.pc & 0xFF)
-            mmu.write(self.sp + 1, self.pc >> 8)
+            self.mmu.write(self.sp, self.pc & 0xFF)
+            self.mmu.write(self.sp + 1, self.pc >> 8)
             self.pc = addr
             return 24
+        ops[0xCD] = op_CD
         
-        # ADC A,n
-        elif op == 0xCE:
-            n = mmu.read(self.pc)
+        # 0xCE ADC A,n
+        def op_CE():
+            n = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             c = (self.f >> 4) & 1
             r = self.a + n + c
             self.f = (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (self.a & 0xF) + (n & 0xF) + c > 0xF else 0) | (0x10 if r > 0xFF else 0)
             self.a = r & 0xFF
             return 8
+        ops[0xCE] = op_CE
         
-        # RST 08
-        elif op == 0xCF:
+        # 0xCF RST 08
+        def op_CF():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.pc & 0xFF)
-            mmu.write(self.sp + 1, self.pc >> 8)
+            self.mmu.write(self.sp, self.pc & 0xFF)
+            self.mmu.write(self.sp + 1, self.pc >> 8)
             self.pc = 0x08
             return 16
+        ops[0xCF] = op_CF
         
-        # RET NC
-        elif op == 0xD0:
+        # 0xD0 RET NC
+        def op_D0():
             if not (self.f & 0x10):
-                self.pc = mmu.read(self.sp) | (mmu.read(self.sp + 1) << 8)
+                self.pc = self.mmu.read(self.sp) | (self.mmu.read(self.sp + 1) << 8)
                 self.sp = (self.sp + 2) & 0xFFFF
                 return 20
             return 8
+        ops[0xD0] = op_D0
         
-        # POP DE
-        elif op == 0xD1:
-            self.e = mmu.read(self.sp)
-            self.d = mmu.read(self.sp + 1)
+        # 0xD1 POP DE
+        def op_D1():
+            self.e = self.mmu.read(self.sp)
+            self.d = self.mmu.read(self.sp + 1)
             self.sp = (self.sp + 2) & 0xFFFF
             return 12
+        ops[0xD1] = op_D1
         
-        # JP NC,nn
-        elif op == 0xD2:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xD2 JP NC,nn
+        def op_D2():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
             if not (self.f & 0x10):
                 self.pc = addr
                 return 16
             return 12
+        ops[0xD2] = op_D2
         
-        # CALL NC,nn
-        elif op == 0xD4:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xD4 CALL NC,nn
+        def op_D4():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
             if not (self.f & 0x10):
                 self.sp = (self.sp - 2) & 0xFFFF
-                mmu.write(self.sp, self.pc & 0xFF)
-                mmu.write(self.sp + 1, self.pc >> 8)
+                self.mmu.write(self.sp, self.pc & 0xFF)
+                self.mmu.write(self.sp + 1, self.pc >> 8)
                 self.pc = addr
                 return 24
             return 12
+        ops[0xD4] = op_D4
         
-        # PUSH DE
-        elif op == 0xD5:
+        # 0xD5 PUSH DE
+        def op_D5():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.e)
-            mmu.write(self.sp + 1, self.d)
+            self.mmu.write(self.sp, self.e)
+            self.mmu.write(self.sp + 1, self.d)
             return 16
+        ops[0xD5] = op_D5
         
-        # SUB n
-        elif op == 0xD6:
-            n = mmu.read(self.pc)
+        # 0xD6 SUB n
+        def op_D6():
+            n = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             r = self.a - n
             self.f = 0x40 | (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (self.a & 0xF) < (n & 0xF) else 0) | (0x10 if r < 0 else 0)
             self.a = r & 0xFF
             return 8
+        ops[0xD6] = op_D6
         
-        # RST 10
-        elif op == 0xD7:
+        # 0xD7 RST 10
+        def op_D7():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.pc & 0xFF)
-            mmu.write(self.sp + 1, self.pc >> 8)
+            self.mmu.write(self.sp, self.pc & 0xFF)
+            self.mmu.write(self.sp + 1, self.pc >> 8)
             self.pc = 0x10
             return 16
+        ops[0xD7] = op_D7
         
-        # RET C
-        elif op == 0xD8:
+        # 0xD8 RET C
+        def op_D8():
             if self.f & 0x10:
-                self.pc = mmu.read(self.sp) | (mmu.read(self.sp + 1) << 8)
+                self.pc = self.mmu.read(self.sp) | (self.mmu.read(self.sp + 1) << 8)
                 self.sp = (self.sp + 2) & 0xFFFF
                 return 20
             return 8
+        ops[0xD8] = op_D8
         
-        # RETI
-        elif op == 0xD9:
-            self.pc = mmu.read(self.sp) | (mmu.read(self.sp + 1) << 8)
+        # 0xD9 RETI
+        def op_D9():
+            self.pc = self.mmu.read(self.sp) | (self.mmu.read(self.sp + 1) << 8)
             self.sp = (self.sp + 2) & 0xFFFF
             self.ime = True
             return 16
+        ops[0xD9] = op_D9
         
-        # JP C,nn
-        elif op == 0xDA:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xDA JP C,nn
+        def op_DA():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
             if self.f & 0x10:
                 self.pc = addr
                 return 16
             return 12
+        ops[0xDA] = op_DA
         
-        # CALL C,nn
-        elif op == 0xDC:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xDC CALL C,nn
+        def op_DC():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
             if self.f & 0x10:
                 self.sp = (self.sp - 2) & 0xFFFF
-                mmu.write(self.sp, self.pc & 0xFF)
-                mmu.write(self.sp + 1, self.pc >> 8)
+                self.mmu.write(self.sp, self.pc & 0xFF)
+                self.mmu.write(self.sp + 1, self.pc >> 8)
                 self.pc = addr
                 return 24
             return 12
+        ops[0xDC] = op_DC
         
-        # SBC A,n
-        elif op == 0xDE:
-            n = mmu.read(self.pc)
+        # 0xDE SBC A,n
+        def op_DE():
+            n = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             c = (self.f >> 4) & 1
             r = self.a - n - c
             self.f = 0x40 | (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (self.a & 0xF) < (n & 0xF) + c else 0) | (0x10 if r < 0 else 0)
             self.a = r & 0xFF
             return 8
+        ops[0xDE] = op_DE
         
-        # RST 18
-        elif op == 0xDF:
+        # 0xDF RST 18
+        def op_DF():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.pc & 0xFF)
-            mmu.write(self.sp + 1, self.pc >> 8)
+            self.mmu.write(self.sp, self.pc & 0xFF)
+            self.mmu.write(self.sp + 1, self.pc >> 8)
             self.pc = 0x18
             return 16
+        ops[0xDF] = op_DF
         
-        # LDH (n),A
-        elif op == 0xE0:
-            mmu.write(0xFF00 + mmu.read(self.pc), self.a)
+        # 0xE0 LDH (n),A
+        def op_E0():
+            self.mmu.write(0xFF00 + self.mmu.read(self.pc), self.a)
             self.pc = (self.pc + 1) & 0xFFFF
             return 12
+        ops[0xE0] = op_E0
         
-        # POP HL
-        elif op == 0xE1:
-            self.l = mmu.read(self.sp)
-            self.h = mmu.read(self.sp + 1)
+        # 0xE1 POP HL
+        def op_E1():
+            self.l = self.mmu.read(self.sp)
+            self.h = self.mmu.read(self.sp + 1)
             self.sp = (self.sp + 2) & 0xFFFF
             return 12
+        ops[0xE1] = op_E1
         
-        # LDH (C),A
-        elif op == 0xE2:
-            mmu.write(0xFF00 + self.c, self.a)
+        # 0xE2 LDH (C),A
+        def op_E2():
+            self.mmu.write(0xFF00 + self.c, self.a)
             return 8
+        ops[0xE2] = op_E2
         
-        # PUSH HL
-        elif op == 0xE5:
+        # 0xE5 PUSH HL
+        def op_E5():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.l)
-            mmu.write(self.sp + 1, self.h)
+            self.mmu.write(self.sp, self.l)
+            self.mmu.write(self.sp + 1, self.h)
             return 16
+        ops[0xE5] = op_E5
         
-        # AND n
-        elif op == 0xE6:
-            self.a &= mmu.read(self.pc)
+        # 0xE6 AND n
+        def op_E6():
+            self.a &= self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             self.f = 0x20 | (0x80 if self.a == 0 else 0)
             return 8
+        ops[0xE6] = op_E6
         
-        # RST 20
-        elif op == 0xE7:
+        # 0xE7 RST 20
+        def op_E7():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.pc & 0xFF)
-            mmu.write(self.sp + 1, self.pc >> 8)
+            self.mmu.write(self.sp, self.pc & 0xFF)
+            self.mmu.write(self.sp + 1, self.pc >> 8)
             self.pc = 0x20
             return 16
+        ops[0xE7] = op_E7
         
-        # ADD SP,n
-        elif op == 0xE8:
-            n = mmu.read(self.pc)
+        # 0xE8 ADD SP,n
+        def op_E8():
+            n = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             if n > 127:
                 n -= 256
@@ -843,82 +1055,94 @@ class CPU:
             self.f = (0x20 if (self.sp & 0xF) + (n & 0xF) > 0xF else 0) | (0x10 if (self.sp & 0xFF) + (n & 0xFF) > 0xFF else 0)
             self.sp = r & 0xFFFF
             return 16
+        ops[0xE8] = op_E8
         
-        # JP HL
-        elif op == 0xE9:
+        # 0xE9 JP HL
+        def op_E9():
             self.pc = (self.h << 8) | self.l
             return 4
+        ops[0xE9] = op_E9
         
-        # LD (nn),A
-        elif op == 0xEA:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xEA LD (nn),A
+        def op_EA():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
-            mmu.write(addr, self.a)
+            self.mmu.write(addr, self.a)
             return 16
+        ops[0xEA] = op_EA
         
-        # XOR n
-        elif op == 0xEE:
-            self.a ^= mmu.read(self.pc)
+        # 0xEE XOR n
+        def op_EE():
+            self.a ^= self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             self.f = 0x80 if self.a == 0 else 0
             return 8
+        ops[0xEE] = op_EE
         
-        # RST 28
-        elif op == 0xEF:
+        # 0xEF RST 28
+        def op_EF():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.pc & 0xFF)
-            mmu.write(self.sp + 1, self.pc >> 8)
+            self.mmu.write(self.sp, self.pc & 0xFF)
+            self.mmu.write(self.sp + 1, self.pc >> 8)
             self.pc = 0x28
             return 16
+        ops[0xEF] = op_EF
         
-        # LDH A,(n)
-        elif op == 0xF0:
-            self.a = mmu.read(0xFF00 + mmu.read(self.pc))
+        # 0xF0 LDH A,(n)
+        def op_F0():
+            self.a = self.mmu.read(0xFF00 + self.mmu.read(self.pc))
             self.pc = (self.pc + 1) & 0xFFFF
             return 12
+        ops[0xF0] = op_F0
         
-        # POP AF
-        elif op == 0xF1:
-            self.f = mmu.read(self.sp) & 0xF0
-            self.a = mmu.read(self.sp + 1)
+        # 0xF1 POP AF
+        def op_F1():
+            self.f = self.mmu.read(self.sp) & 0xF0
+            self.a = self.mmu.read(self.sp + 1)
             self.sp = (self.sp + 2) & 0xFFFF
             return 12
+        ops[0xF1] = op_F1
         
-        # LDH A,(C)
-        elif op == 0xF2:
-            self.a = mmu.read(0xFF00 + self.c)
+        # 0xF2 LDH A,(C)
+        def op_F2():
+            self.a = self.mmu.read(0xFF00 + self.c)
             return 8
+        ops[0xF2] = op_F2
         
-        # DI
-        elif op == 0xF3:
+        # 0xF3 DI
+        def op_F3():
             self.ime = False
             return 4
+        ops[0xF3] = op_F3
         
-        # PUSH AF
-        elif op == 0xF5:
+        # 0xF5 PUSH AF
+        def op_F5():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.f)
-            mmu.write(self.sp + 1, self.a)
+            self.mmu.write(self.sp, self.f)
+            self.mmu.write(self.sp + 1, self.a)
             return 16
+        ops[0xF5] = op_F5
         
-        # OR n
-        elif op == 0xF6:
-            self.a |= mmu.read(self.pc)
+        # 0xF6 OR n
+        def op_F6():
+            self.a |= self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             self.f = 0x80 if self.a == 0 else 0
             return 8
+        ops[0xF6] = op_F6
         
-        # RST 30
-        elif op == 0xF7:
+        # 0xF7 RST 30
+        def op_F7():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.pc & 0xFF)
-            mmu.write(self.sp + 1, self.pc >> 8)
+            self.mmu.write(self.sp, self.pc & 0xFF)
+            self.mmu.write(self.sp + 1, self.pc >> 8)
             self.pc = 0x30
             return 16
+        ops[0xF7] = op_F7
         
-        # LD HL,SP+n
-        elif op == 0xF8:
-            n = mmu.read(self.pc)
+        # 0xF8 LD HL,SP+n
+        def op_F8():
+            n = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             if n > 127:
                 n -= 256
@@ -927,194 +1151,185 @@ class CPU:
             self.h = (r >> 8) & 0xFF
             self.l = r & 0xFF
             return 12
+        ops[0xF8] = op_F8
         
-        # LD SP,HL
-        elif op == 0xF9:
+        # 0xF9 LD SP,HL
+        def op_F9():
             self.sp = (self.h << 8) | self.l
             return 8
+        ops[0xF9] = op_F9
         
-        # LD A,(nn)
-        elif op == 0xFA:
-            addr = mmu.read(self.pc) | (mmu.read(self.pc + 1) << 8)
+        # 0xFA LD A,(nn)
+        def op_FA():
+            addr = self.mmu.read(self.pc) | (self.mmu.read(self.pc + 1) << 8)
             self.pc = (self.pc + 2) & 0xFFFF
-            self.a = mmu.read(addr)
+            self.a = self.mmu.read(addr)
             return 16
+        ops[0xFA] = op_FA
         
-        # EI
-        elif op == 0xFB:
+        # 0xFB EI
+        def op_FB():
             self.ime_next = True
             return 4
+        ops[0xFB] = op_FB
         
-        # CP n
-        elif op == 0xFE:
-            n = mmu.read(self.pc)
+        # 0xFE CP n
+        def op_FE():
+            n = self.mmu.read(self.pc)
             self.pc = (self.pc + 1) & 0xFFFF
             r = self.a - n
             self.f = 0x40 | (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (self.a & 0xF) < (n & 0xF) else 0) | (0x10 if r < 0 else 0)
             return 8
+        ops[0xFE] = op_FE
         
-        # RST 38
-        elif op == 0xFF:
+        # 0xFF RST 38
+        def op_FF():
             self.sp = (self.sp - 2) & 0xFFFF
-            mmu.write(self.sp, self.pc & 0xFF)
-            mmu.write(self.sp + 1, self.pc >> 8)
+            self.mmu.write(self.sp, self.pc & 0xFF)
+            self.mmu.write(self.sp + 1, self.pc >> 8)
             self.pc = 0x38
             return 16
+        ops[0xFF] = op_FF
         
-        return 4
+        return ops
     
-    def _ld_r_r(self, op):
-        """LD r,r optimizado"""
-        src_idx = op & 0x07
-        dst_idx = (op >> 3) & 0x07
+    def _build_cb_ops(self):
+        """Construye tabla de 256 handlers para CB prefix"""
+        cb = [lambda: 8] * 256
         
-        # Obtener valor fuente
-        if src_idx == 0: v = self.b
-        elif src_idx == 1: v = self.c
-        elif src_idx == 2: v = self.d
-        elif src_idx == 3: v = self.e
-        elif src_idx == 4: v = self.h
-        elif src_idx == 5: v = self.l
-        elif src_idx == 6:
-            v = self.mmu.read((self.h << 8) | self.l)
-        else: v = self.a
+        regs_get = [
+            lambda: self.b, lambda: self.c, lambda: self.d, lambda: self.e,
+            lambda: self.h, lambda: self.l, lambda: self.mmu.read((self.h << 8) | self.l), lambda: self.a
+        ]
         
-        # Guardar en destino
-        if dst_idx == 0: self.b = v
-        elif dst_idx == 1: self.c = v
-        elif dst_idx == 2: self.d = v
-        elif dst_idx == 3: self.e = v
-        elif dst_idx == 4: self.h = v
-        elif dst_idx == 5: self.l = v
-        elif dst_idx == 6:
-            self.mmu.write((self.h << 8) | self.l, v)
-            return 8
-        else: self.a = v
+        def set_reg(idx, val):
+            if idx == 0: self.b = val
+            elif idx == 1: self.c = val
+            elif idx == 2: self.d = val
+            elif idx == 3: self.e = val
+            elif idx == 4: self.h = val
+            elif idx == 5: self.l = val
+            elif idx == 6: self.mmu.write((self.h << 8) | self.l, val)
+            else: self.a = val
         
-        return 8 if src_idx == 6 else 4
-    
-    def _alu(self, op):
-        """ALU ops optimizado"""
-        src_idx = op & 0x07
-        alu_op = (op >> 3) & 0x07
+        for opcode in range(256):
+            reg = opcode & 7
+            op_type = opcode >> 3
+            cycles = 16 if reg == 6 else 8
+            
+            if op_type == 0:  # RLC
+                def make_rlc(r, c):
+                    def op():
+                        v = regs_get[r]()
+                        carry = v >> 7
+                        v = ((v << 1) | carry) & 0xFF
+                        self.f = (carry << 4) | (0x80 if v == 0 else 0)
+                        set_reg(r, v)
+                        return c
+                    return op
+                cb[opcode] = make_rlc(reg, cycles)
+            elif op_type == 1:  # RRC
+                def make_rrc(r, c):
+                    def op():
+                        v = regs_get[r]()
+                        carry = v & 1
+                        v = (v >> 1) | (carry << 7)
+                        self.f = (carry << 4) | (0x80 if v == 0 else 0)
+                        set_reg(r, v)
+                        return c
+                    return op
+                cb[opcode] = make_rrc(reg, cycles)
+            elif op_type == 2:  # RL
+                def make_rl(r, c):
+                    def op():
+                        v = regs_get[r]()
+                        carry = v >> 7
+                        v = ((v << 1) | ((self.f >> 4) & 1)) & 0xFF
+                        self.f = (carry << 4) | (0x80 if v == 0 else 0)
+                        set_reg(r, v)
+                        return c
+                    return op
+                cb[opcode] = make_rl(reg, cycles)
+            elif op_type == 3:  # RR
+                def make_rr(r, c):
+                    def op():
+                        v = regs_get[r]()
+                        carry = v & 1
+                        v = (v >> 1) | ((self.f << 3) & 0x80)
+                        self.f = (carry << 4) | (0x80 if v == 0 else 0)
+                        set_reg(r, v)
+                        return c
+                    return op
+                cb[opcode] = make_rr(reg, cycles)
+            elif op_type == 4:  # SLA
+                def make_sla(r, c):
+                    def op():
+                        v = regs_get[r]()
+                        carry = v >> 7
+                        v = (v << 1) & 0xFF
+                        self.f = (carry << 4) | (0x80 if v == 0 else 0)
+                        set_reg(r, v)
+                        return c
+                    return op
+                cb[opcode] = make_sla(reg, cycles)
+            elif op_type == 5:  # SRA
+                def make_sra(r, c):
+                    def op():
+                        v = regs_get[r]()
+                        carry = v & 1
+                        v = (v >> 1) | (v & 0x80)
+                        self.f = (carry << 4) | (0x80 if v == 0 else 0)
+                        set_reg(r, v)
+                        return c
+                    return op
+                cb[opcode] = make_sra(reg, cycles)
+            elif op_type == 6:  # SWAP
+                def make_swap(r, c):
+                    def op():
+                        v = regs_get[r]()
+                        v = ((v & 0xF) << 4) | (v >> 4)
+                        self.f = 0x80 if v == 0 else 0
+                        set_reg(r, v)
+                        return c
+                    return op
+                cb[opcode] = make_swap(reg, cycles)
+            elif op_type == 7:  # SRL
+                def make_srl(r, c):
+                    def op():
+                        v = regs_get[r]()
+                        carry = v & 1
+                        v = v >> 1
+                        self.f = (carry << 4) | (0x80 if v == 0 else 0)
+                        set_reg(r, v)
+                        return c
+                    return op
+                cb[opcode] = make_srl(reg, cycles)
+            elif 8 <= op_type < 16:  # BIT
+                bit = op_type - 8
+                def make_bit(r, b, c):
+                    def op():
+                        v = regs_get[r]()
+                        self.f = (self.f & 0x10) | 0x20 | (0x80 if not (v & (1 << b)) else 0)
+                        return 12 if r == 6 else 8
+                    return op
+                cb[opcode] = make_bit(reg, bit, cycles)
+            elif 16 <= op_type < 24:  # RES
+                bit = op_type - 16
+                def make_res(r, b, c):
+                    def op():
+                        v = regs_get[r]() & ~(1 << b)
+                        set_reg(r, v)
+                        return c
+                    return op
+                cb[opcode] = make_res(reg, bit, cycles)
+            else:  # SET
+                bit = op_type - 24
+                def make_set(r, b, c):
+                    def op():
+                        v = regs_get[r]() | (1 << b)
+                        set_reg(r, v)
+                        return c
+                    return op
+                cb[opcode] = make_set(reg, bit, cycles)
         
-        # Obtener valor
-        if src_idx == 0: v = self.b
-        elif src_idx == 1: v = self.c
-        elif src_idx == 2: v = self.d
-        elif src_idx == 3: v = self.e
-        elif src_idx == 4: v = self.h
-        elif src_idx == 5: v = self.l
-        elif src_idx == 6:
-            v = self.mmu.read((self.h << 8) | self.l)
-        else: v = self.a
-        
-        a = self.a
-        
-        if alu_op == 0:  # ADD
-            r = a + v
-            self.f = (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (a & 0xF) + (v & 0xF) > 0xF else 0) | (0x10 if r > 0xFF else 0)
-            self.a = r & 0xFF
-        elif alu_op == 1:  # ADC
-            c = (self.f >> 4) & 1
-            r = a + v + c
-            self.f = (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (a & 0xF) + (v & 0xF) + c > 0xF else 0) | (0x10 if r > 0xFF else 0)
-            self.a = r & 0xFF
-        elif alu_op == 2:  # SUB
-            r = a - v
-            self.f = 0x40 | (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (a & 0xF) < (v & 0xF) else 0) | (0x10 if r < 0 else 0)
-            self.a = r & 0xFF
-        elif alu_op == 3:  # SBC
-            c = (self.f >> 4) & 1
-            r = a - v - c
-            self.f = 0x40 | (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (a & 0xF) < (v & 0xF) + c else 0) | (0x10 if r < 0 else 0)
-            self.a = r & 0xFF
-        elif alu_op == 4:  # AND
-            self.a = a & v
-            self.f = 0x20 | (0x80 if self.a == 0 else 0)
-        elif alu_op == 5:  # XOR
-            self.a = a ^ v
-            self.f = 0x80 if self.a == 0 else 0
-        elif alu_op == 6:  # OR
-            self.a = a | v
-            self.f = 0x80 if self.a == 0 else 0
-        else:  # CP
-            r = a - v
-            self.f = 0x40 | (0x80 if (r & 0xFF) == 0 else 0) | (0x20 if (a & 0xF) < (v & 0xF) else 0) | (0x10 if r < 0 else 0)
-        
-        return 8 if src_idx == 6 else 4
-    
-    def _cb(self, op):
-        """CB prefix ops"""
-        self.pc = (self.pc + 1) & 0xFFFF
-        
-        reg_idx = op & 0x07
-        cb_op = op >> 3
-        
-        # Obtener valor
-        if reg_idx == 0: v = self.b
-        elif reg_idx == 1: v = self.c
-        elif reg_idx == 2: v = self.d
-        elif reg_idx == 3: v = self.e
-        elif reg_idx == 4: v = self.h
-        elif reg_idx == 5: v = self.l
-        elif reg_idx == 6:
-            v = self.mmu.read((self.h << 8) | self.l)
-        else: v = self.a
-        
-        if cb_op < 8:  # Rotates/shifts
-            if cb_op == 0:  # RLC
-                c = v >> 7
-                v = ((v << 1) | c) & 0xFF
-                self.f = (c << 4) | (0x80 if v == 0 else 0)
-            elif cb_op == 1:  # RRC
-                c = v & 1
-                v = (v >> 1) | (c << 7)
-                self.f = (c << 4) | (0x80 if v == 0 else 0)
-            elif cb_op == 2:  # RL
-                c = v >> 7
-                v = ((v << 1) | ((self.f >> 4) & 1)) & 0xFF
-                self.f = (c << 4) | (0x80 if v == 0 else 0)
-            elif cb_op == 3:  # RR
-                c = v & 1
-                v = (v >> 1) | ((self.f << 3) & 0x80)
-                self.f = (c << 4) | (0x80 if v == 0 else 0)
-            elif cb_op == 4:  # SLA
-                c = v >> 7
-                v = (v << 1) & 0xFF
-                self.f = (c << 4) | (0x80 if v == 0 else 0)
-            elif cb_op == 5:  # SRA
-                c = v & 1
-                v = (v >> 1) | (v & 0x80)
-                self.f = (c << 4) | (0x80 if v == 0 else 0)
-            elif cb_op == 6:  # SWAP
-                v = ((v & 0xF) << 4) | (v >> 4)
-                self.f = 0x80 if v == 0 else 0
-            else:  # SRL
-                c = v & 1
-                v = v >> 1
-                self.f = (c << 4) | (0x80 if v == 0 else 0)
-        elif cb_op < 16:  # BIT
-            bit = cb_op - 8
-            self.f = (self.f & 0x10) | 0x20 | (0x80 if not (v & (1 << bit)) else 0)
-            return 12 if reg_idx == 6 else 8
-        elif cb_op < 24:  # RES
-            bit = cb_op - 16
-            v &= ~(1 << bit)
-        else:  # SET
-            bit = cb_op - 24
-            v |= 1 << bit
-        
-        # Guardar resultado
-        if reg_idx == 0: self.b = v
-        elif reg_idx == 1: self.c = v
-        elif reg_idx == 2: self.d = v
-        elif reg_idx == 3: self.e = v
-        elif reg_idx == 4: self.h = v
-        elif reg_idx == 5: self.l = v
-        elif reg_idx == 6:
-            self.mmu.write((self.h << 8) | self.l, v)
-            return 16
-        else: self.a = v
-        
-        return 8
+        return cb

@@ -1,6 +1,9 @@
+# cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
 """
-GameBoy - Core optimizado
+GameBoy Core - Con ticking preciso
 """
+
+cimport cython
 
 from pydmg.cpu import CPU
 from pydmg.mmu import MMU
@@ -15,10 +18,14 @@ except:
     APU_AVAILABLE = False
 
 
-class GameBoy:
-    __slots__ = ('mmu', 'cpu', 'ppu', 'timer', 'joypad', 'apu', 'audio_enabled')
-    
-    CYCLES_PER_FRAME = 70224
+cdef class GameBoy:
+    cdef public object mmu
+    cdef public object cpu
+    cdef public object ppu
+    cdef public object timer
+    cdef public object joypad
+    cdef public object apu
+    cdef public bint audio_enabled
     
     def __init__(self):
         self.mmu = MMU()
@@ -27,9 +34,13 @@ class GameBoy:
         self.timer = Timer(self.mmu)
         self.joypad = Joypad(self.mmu)
         
+        # Conectar componentes al MMU
         self.mmu.ppu = self.ppu
         self.mmu.timer = self.timer
         self.mmu.joypad = self.joypad
+        
+        # Conectar PPU y Timer al CPU para ticking preciso
+        self.cpu.set_components(self.ppu, self.timer)
         
         self.apu = None
         self.audio_enabled = True
@@ -46,28 +57,22 @@ class GameBoy:
             data = f.read()
         self.mmu.load_rom(data, path)
     
-    def run_frame(self):
-        """Ejecuta un frame completo - OPTIMIZADO"""
-        # Cache de referencias locales (evita lookups repetidos)
-        cpu = self.cpu
+    cpdef object run_frame(self):
+        """Ejecuta hasta completar un frame"""
+        cdef int max_steps = 70224 * 2  # Límite de seguridad
+        cdef int steps = 0
+        
+        cpu_step = self.cpu.step
         ppu = self.ppu
-        timer = self.timer
-        cpu_step = cpu.step
-        ppu_step = ppu.step
-        timer_step = timer.step
         
         ppu.frame_ready = False
-        cycles = 0
-        max_cycles = 140448  # 2x CYCLES_PER_FRAME como límite
         
-        # Loop principal optimizado
-        while not ppu.frame_ready and cycles < max_cycles:
-            c = cpu_step()
-            timer_step(c)
-            ppu_step(c)
-            cycles += c
+        # El CPU ahora hace tick interno, así que solo llamamos step
+        while not ppu.frame_ready and steps < max_steps:
+            cpu_step()
+            steps += 1
         
-        if self.apu and self.audio_enabled:
+        if self.apu is not None and self.audio_enabled:
             self.apu.end_frame()
         
         return ppu.framebuffer
@@ -87,5 +92,5 @@ class GameBoy:
     
     def close(self):
         self.save()
-        if self.apu:
+        if self.apu is not None:
             self.apu.close()

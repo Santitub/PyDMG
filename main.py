@@ -29,12 +29,12 @@ try:
 except:
     pass
 
-# Paletas de colores (tuplas RGB)
+# Paletas de colores como arrays NumPy para lookup rápido
 PALETTES = {
-    'dmg': [(155, 188, 15), (139, 172, 15), (48, 98, 48), (15, 56, 15)],
-    'gray': [(255, 255, 255), (192, 192, 192), (96, 96, 96), (0, 0, 0)],
-    'green': [(224, 248, 208), (136, 192, 112), (52, 104, 86), (8, 24, 32)],
-    'pocket': [(255, 255, 255), (170, 170, 170), (85, 85, 85), (0, 0, 0)],
+    'dmg': np.array([[155, 188, 15], [139, 172, 15], [48, 98, 48], [15, 56, 15]], dtype=np.uint8),
+    'gray': np.array([[255, 255, 255], [192, 192, 192], [96, 96, 96], [0, 0, 0]], dtype=np.uint8),
+    'green': np.array([[224, 248, 208], [136, 192, 112], [52, 104, 86], [8, 24, 32]], dtype=np.uint8),
+    'pocket': np.array([[255, 255, 255], [170, 170, 170], [85, 85, 85], [0, 0, 0]], dtype=np.uint8),
 }
 
 
@@ -79,8 +79,8 @@ class Emulator:
             self.SCREEN_HEIGHT
         )
         
-        # Buffer de píxeles (RGB, 3 bytes por pixel)
-        self.pixels = np.zeros((self.SCREEN_HEIGHT, self.SCREEN_WIDTH, 3), dtype=np.uint8)
+        # Buffer de píxeles (RGB, 3 bytes por pixel) - contiguo en memoria
+        self.pixels = np.zeros((self.SCREEN_HEIGHT, self.SCREEN_WIDTH, 3), dtype=np.uint8, order='C')
         
         # Game Boy
         self.gameboy = None
@@ -140,6 +140,8 @@ class Emulator:
             title = f"Game Boy - {rom_name} [Slot {self.save_slot}]"
             if self.paused:
                 title += " (PAUSA)"
+            if self.turbo:
+                title += " [TURBO]"
         else:
             title = "Game Boy Emulator"
         
@@ -203,6 +205,7 @@ class Emulator:
                 
                 elif key == sdl2.SDLK_SPACE:
                     self.turbo = True
+                    self._update_title()
                 
                 # Save States
                 elif key == sdl2.SDLK_F5:
@@ -238,6 +241,7 @@ class Emulator:
                 
                 if key == sdl2.SDLK_SPACE:
                     self.turbo = False
+                    self._update_title()
                 elif key in self.keymap:
                     self.gameboy.release_button(self.keymap[key])
     
@@ -272,19 +276,17 @@ class Emulator:
 """)
     
     def render(self, framebuffer):
-        """Renderiza el framebuffer a la pantalla"""
-        # Convertir framebuffer (lista de listas) a pixels RGB
-        # Esto funciona con lista de listas O numpy arrays
-        for y in range(self.SCREEN_HEIGHT):
-            for x in range(self.SCREEN_WIDTH):
-                # Obtener índice de color (0-3)
-                color_idx = framebuffer[y][x]
-                # Obtener color RGB de la paleta
-                r, g, b = self.palette[color_idx]
-                # Escribir al buffer de píxeles
-                self.pixels[y, x, 0] = r
-                self.pixels[y, x, 1] = g
-                self.pixels[y, x, 2] = b
+        """Renderiza el framebuffer a la pantalla - OPTIMIZADO"""
+        # Convertir framebuffer a numpy array si es necesario
+        if isinstance(framebuffer, np.ndarray):
+            fb = framebuffer
+        else:
+            # Si es lista de listas, convertir a numpy
+            fb = np.asarray(framebuffer, dtype=np.uint8)
+        
+        # Aplicar paleta usando indexación numpy (vectorizado)
+        # Esto reemplaza ~23,000 iteraciones con una sola operación
+        np.take(self.palette, fb, axis=0, out=self.pixels)
         
         # Actualizar textura
         sdl2.SDL_UpdateTexture(
