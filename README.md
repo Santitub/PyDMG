@@ -1,6 +1,6 @@
 # PyDMG - Game Boy Emulator
 
-[![DeepWiki](https://img.shields.io/badge/DeepWiki-Santitub%2FPyDMG-blue)](https://deepwiki.com/Santitub/PyDMG)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Santitub/PyDMG)
 
 Un emulador de Game Boy Classic (DMG) completo y preciso escrito en Python con optimizaciones opcionales en Cython.
 
