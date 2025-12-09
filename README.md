@@ -1,129 +1,103 @@
-# PyDMG - Game Boy Emulator
+# PyDMG 🎮🔥
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Santitub/PyDMG)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Santitub/PyDMG) [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Status: Active](https://img.shields.io/badge/status-active-brightgreen.svg)]()
 
-Un emulador de Game Boy Classic (DMG) completo y preciso escrito en Python con optimizaciones opcionales en Cython.
+Un emulador de **Game Boy Classic** de alto rendimiento escrito en Python y optimizado con Cython para lograr velocidad de juego completa con precisión de ciclo.
 
-## 🎮 Características
+---
 
-- **CPU LR35902**: Implementación completa del conjunto de instrucciones con todos los modos de direccionamiento
-- **PPU Preciso**: Renderizado de gráficos con soporte para fondo, ventana, sprites y todas las modalidades de visualización
-- **APU con SDL2**: Sistema de audio de 4 canales (2×Pulse, Wave, Noise) con cola de audio eficiente
-- **MBC Completo**: Soporte para MBC1, MBC2, MBC3 (con RTC) y MBC5
-- **Save States**: Guardado y carga instantánea del estado del juego (10 slots)
-- **SRAM Persistent**: Guardado automático de RAM externa para cartuchos con batería
-- **Múltiples Paletas**: 4 paletas de color diferentes (DMG, Grayscale, Green, Pocket)
-- **Controles Avanzados**: Modo turbo, pausa, debug mode y reset
-- **Optimizable**: Soporte para compilar con Cython para máximo rendimiento
+## ⚡ Rendimiento
 
-## 📁 Estructura del Repositorio
+| Modo | Python Puro | Con Cython | Speedup |
+| :--- | :--- | :--- | :--- |
+| **Normal** | ~20 FPS | **~60 FPS** | **3x** |
+| **Turbo** | ~5 FPS | **~50 FPS** | **10x** |
 
+*Benchmarks en Intel Core i5-1135G7 @ 2.40GHz. El turbo mode ejecuta 4 frames por ciclo.*
+
+---
+
+## 🎯 Características Principales
+
+- **🎮 Emulación Precisa**: Timing de CPU por ciclo, PPU con modos de renderizado exactos
+- **⚡ Rendimiento Extremo**: Optimizado con Cython, SIMD AVX2 y Link-Time Optimization
+- **🔊 Audio de Calidad**: 4 canales (Pulse, Wave, Noise) a 22.050Hz stereo
+- **💾 Save States**: 10 slots con compresión zlib (F5/F7)
+- **🎨 Paletas de Color**: 4 paletas integradas (DMG, Verde, Gris, Pocket)
+- **📀 Soporte MBC**: ROMs sin MBC, MBC1, MBC2, MBC3 (con RTC), MBC5
+- **💾 SRAM con Batería**: Guardado automático de partidas (.sav)
+- **🚀 Modo Turbo**: Ejecuta hasta 4x velocidad (mantén ESPACIO)
+- **🛠️ CPU Auto-Detect**: Se adapta automáticamente a tu procesador
+
+---
+
+## 📦 Requisitos
+
+```txt
+PySDL2>=0.9.14
+numpy>=1.19.0
+cython>=0.29.0
+pysdl2-dll>=2.0.0  # Para Windows (SDL2 precompilado)
+py-cpuinfo>=9.0.0
+setuptools>=58.0.0
 ```
-PyDMG/
-├── README.md                 # Este archivo
-├── LICENSE                   # Licencia MIT (pendiente de añadir)
-├── requirements.txt          # Dependencias de Python
-├── setup.py                 # Script de compilación de Cython
-├── main.py                  # Punto de entrada del emulador
-└── pydmg/                   # Paquete principal del emulador
-    ├── __init__.py
-    ├── cpu.py               # Implementación de CPU (Python puro)
-    ├── cpu.pyx              # Implementación de CPU (Cython fuente)
-    ├── ppu.py               # Implementación de PPU (Python puro)
-    ├── ppu.pyx              # Implementación de PPU (Cython fuente)
-    ├── mmu.py               # Memory Management Unit con MBC
-    ├── apu.py               # Audio Processing Unit (Python puro)
-    ├── apu.pyx              # Audio Processing Unit (Cython fuente)
-    ├── timer.py             # Timer del sistema (Python puro)
-    ├── timer.pyx            # Timer del sistema (Cython fuente)
-    ├── joypad.py            # Manejo de entrada
-    ├── savestate.py         # Sistema de save states
-    ├── gameboy.py           # Clase principal del sistema
-```
 
-## ⚠️ Notas Importantes sobre la Estructura
+---
 
-1. **No hay módulos Cython pre-compilados**: Los archivos `.so` **NO están incluidos** en este repositorio. Debes compilarlos manualmente para obtener rendimiento aceptable.
+## 🔧 Instalación
 
-2. **Carpetas dinámicas**: Las carpetas `roms/` y `saves/` deben crearse manualmente (ver instrucciones abajo).
-
-## 🚀 Instalación y Compilación
-
-### Requisitos Previos
-
-- **Python 3.7+**
-- **SDL2** (librería del sistema)
-  - **Ubuntu/Debian**: `sudo apt-get install libsdl2-2.0-0`
-  - **macOS**: `brew install sdl2`
-  - **Windows**: Descargar desde [libsdl.org](https://github.com/libsdl-org/SDL/releases/tag/release-2.32.10)
-
-### Instalación Completa (Obligatoria)
+### Linux / macOS
 
 ```bash
-# Clonar el repositorio
-git clone https://github.com/santitub/PyDMG.git
-cd PyDMG
+# 1. Clonar repositorio
+git clone https://github.com/Santitub/pydmg.git
+cd pydmg
 
-# Crear entorno virtual (recomendado)
-python -m venv venv
-source venv/bin/activate  # En Windows: venv\Scripts\activate
-
-# Instalar dependencias
+# 2. Instalar dependencias
 pip install -r requirements.txt
 
-# Instalar Cython y compilador C (obligatorio)
-pip install cython
-# Ubuntu/Debian: sudo apt-get install build-essential
-# macOS: xcode-select --install
-# Windows: Instalar Visual Studio Build Tools
-
-# Compilar extensiones Cython desde la RAÍZ del proyecto
+# 3. Compilar extensiones Cython (crítico para rendimiento)
 python setup.py build_ext --inplace
 
-# Verificar que se crearon los módulos .so/.pyd
-ls -la pydmg/*.so  # Linux/macOS
-dir pydmg\*.pyd    # Windows
-
-# Ejecutar con la ROM que quieras
-python main.py rom.gb
+# 4. Ejecutar
+python main.py roms/tetris.gb
 ```
 
-### Opciones de Instalación
+### Windows
 
-#### **Versión Cython Compilada** (Recomendado, máximo rendimiento)
-- Requiere: Cython + compilador C (GCC/Clang/MSVC)
-- Compilar con: `python setup.py build_ext --inplace`
-- Rendimiento: 60 FPS constantes con overhead mínimo
-- **Este es el modo recomendado para jugar**
+```powershell
+# 1. Clonar
+git clone https://github.com/Santitub/pydmg.git
+cd pydmg
 
-#### **Versión Python Pura** (Emergencia, solo si no puedes compilar)
-- Solo instalar dependencias con `pip install -r requirements.txt`
-- No requiere compilador C
-- Rendimiento: ~30-40 FPS en CPU moderna
-- **Usar solo si la compilación falla definitivamente**
+# 2. Instalar dependencias (incluye SDL2 precompilado)
+pip install -r requirements.txt
 
-## 📂 Preparar ROMs y Guardados
+# 3. ⚠️ INSTALAR COMPILADOR C++ (PASO OBLIGATORIO)
+#    Descarga "Visual Studio Community" e instala:
+#    "Desarrollo para el escritorio con C++"
+#    Incluye: MSVC, CMake y herramientas de Windows para C++
+#    Link: https://visualstudio.microsoft.com/visual-cpp-build-tools/
 
-```bash
-# Crear carpeta para ROMs (obligatorio)
-mkdir roms
-cp /ruta/a/tus/roms/*.gb roms/
+# 4. Compilar
+python setup.py build_ext --inplace
 
-# Crear carpeta para guardados (opcional, se crea automáticamente)
-mkdir saves
-
-# Ejecutar con una ROM específica
-python main.py roms/tu_juego.gb
+# 5. Ejecutar
+python main.py roms\tetris.gb
 ```
 
-**Nota**: Los archivos de guardado (`.sav` y `.st0-.st9`) se crean en el **mismo directorio que la ROM**, no en la carpeta `saves/` a menos que especifiques esa ruta.
+> **⚠️ IMPORTANTE**: En Windows, **DEBES** instalar las herramientas de C++ de Visual Studio antes de compilar Cython. Sin ellas, la compilación fallará con errores de "vcvarsall.bat no encontrado".
+
+> **⚠️ RENDIMIENTO**: Sin la compilación Cython, el rendimiento será ~20 FPS. La compilación habilita optimizaciones AVX2 y LTCG automáticamente según tu CPU.
+
+---
 
 ## 🎮 Controles
 
 ### Controles del Juego
-| Tecla | Botón Game Boy |
-|-------|----------------|
-| `↑ ↓ ← →` | D-Pad |
+| Tecla | Botón GB |
+| :--- | :--- |
+| `↑↓←→` | D-Pad |
 | `Z` / `A` | A |
 | `X` / `S` | B |
 | `Enter` | Start |
@@ -131,127 +105,114 @@ python main.py roms/tu_juego.gb
 
 ### Controles del Emulador
 | Tecla | Función |
-|-------|---------|
+| :--- | :--- |
+| `F1` | Mostrar ayuda |
 | `P` | Pausar/Continuar |
-| `M` | Silenciar/Activar audio |
 | `C` | Cambiar paleta de color |
-| `R` | Resetear el juego |
-| `D` | Toggle debug mode (muestra FPS) |
-| `Space` | Modo turbo (mantener pulsado) |
-| `ESC` | Salir del emulador |
-
-### Save States
-| Tecla | Función |
-|-------|---------|
-| `F5` | Guardar estado (slot actual) |
-| `F7` | Cargar estado (slot actual) |
+| `M` | Silenciar/Activar audio |
+| `R` | Resetear juego |
+| `D` | Modo debug (FPS log) |
+| `Space` | **Turbo (mantener)** |
+| `ESC` | Salir |
+| **Save States** | |
+| `F5` | Guardar estado |
+| `F7` | Cargar estado |
 | `F6` / `F8` | Slot anterior/siguiente |
-| `0-9` | Seleccionar slot directamente |
+| `0-9` | Seleccionar slot directo |
 
-**Tip**: El slot actual se muestra en el título de la ventana.
+---
 
-## ⚙️ Configuración
+## 🚀 Compilación Avanzada
 
-### Dependencias
+### Modos de Compilación
 
-**requirements.txt:**
+El `setup.py` detecta automáticamente tu CPU y aplica flags optimizados:
+
+```bash
+# Compilación estándar (detecta CPU automáticamente)
+python setup.py build_ext --inplace
+
+# Mantener archivos C intermedios (para debug)
+KEEP_CYTHON_FILES=1 python setup.py build_ext --inplace
+
+# Para distribución (compatibilidad máxima)
+python setup.py build_ext --inplace --force-compat
 ```
-PySDL2>=0.9.14
-numpy>=1.19.0
-Cython>=0.29.0  # Obligatorio para compilar
-```
 
-### Archivos de Configuración
+### Flags por CPU
 
-- **Python puro**: Usa `cpu.py` y `ppu.py` si los módulos Cython no están disponibles
-- **Cython**: Los archivos `.so` tienen prioridad automática si están presentes
+| CPU | Flags Aplicados | Rendimiento |
+| :--- | :--- | :--- |
+| **Moderna** (AVX2) | `/arch:AVX2`, `-march=native`, LTO, unroll loops | ⭐⭐⭐⭐⭐ |
+| **Antigua** (Genérico) | `/O2`, `-march=x86-64`, tune genérico | ⭐⭐⭐ |
 
-## 🔧 Desarrollo
+---
 
-### Arquitectura del Emulador
+## 🏗️ Arquitectura Técnica
 
 ```
 ┌─────────────────────────────────────────┐
-│              main.py                    │
-│     (SDL2 Frontend + Event Loop)        │
-└──────────────┬──────────────────────────┘
-               │
-┌──────────────▼──────────────────────────┐
-│        pydmg/gameboy.py                 │
-│      (Coordinator + Frame Synchrony)    │
-└──────┬──────────────────┬───────────────┘
-       │                  │
-┌──────▼──────┐    ┌─────▼──────┐
-│  cpu.py/so  │    │  ppu.py/so │
-│   (LR35902) │    │ (Renderer) │
-└──────┬──────┘    └─────┬──────┘
-       │                 │
-┌──────▼──────┐    ┌─────▼──────┐
-│   mmu.py    │◄──►│  apu.py    │
-│ (Memory +   │    │ (Audio)    │
-│   MBC)      │    └────────────┘
-└──────┬──────┘
-       │
-┌──────▼──────┐
-│ timer.py    │
-│ joypad.py   │
-│ savestate.py│
-└─────────────┘
+│           main.py (SDL2 Frontend)       │
+└─────────────────┬───────────────────────┘
+                  │
+┌─────────────────▼───────────────────────┐
+│         GameBoy (Orchestrator)          │
+├───────────┬───────────┬───────────┬─────┤
+│  CPU      │  PPU      │  APU      │ MMU │
+│  (LR35902)│  (LCD)    │  (Audio)  │     │
+└───────────┴───────────┴───────────┴─────┘
+     ▲           ▲          ▲           │
+     │           │          │           ▼
+┌────┴─────┐ ┌───┴────┐ ┌──┴────┐ ┌─────┴────────┐
+│  Timer   │ │ Window │ │ SDL2  │ │ MBC1/2/3/5   │
+│          │ │ Sprites│ │ Queue │ │ SRAM .sav    │
+└──────────┘ └────────┘ └───────┘ └──────────────┘
 ```
 
-### Perfiles de Rendimiento
+### Componentes Core
 
-| Modo | FPS Promedio | Uso CPU | Requisitos |
-|------|--------------|---------|------------|
-| Python puro | 30-40 | 80-100% | Sin compilar (emergencia) |
-| Cython compilado | 60 estable | 30-50% | Requiere `setup.py build_ext` |
+- **CPU**: Dispatch table de 256 handlers, timing por M-cycle, HALT bug implementado
+- **PPU**: Memoryviews de Cython, renderizado scanline, 4 modos exactos
+- **APU**: Generación por lotes, 4 canales, buffer de 512 samples, SDL_QueueAudio
+- **MMU**: MBC completo, batería SRAM, DMA, memoria conectada
+- **Timer**: Div preciso por ciclo, 4 frecuencias seleccionables
 
-## 🐛 Solución de Problemas
+---
 
-### **"SDL2 no encontrado"**
+## 🎨 Ejemplos de Paletas
+
+| Paleta | Previsualización | Uso |
+| :--- | :--- | :--- |
+| **dmg** | 🟫🟩🟩🟫 | Clásico Game Boy |
+| **green** | 🟩🟩🟩🟩 | Pantalla verde original |
+| **gray** | ⬜⬜⬜⬜ | Escala de grises pura |
+| **pocket** | ⬜⬜⬜⬜ | Game Boy Pocket |
+
+## 🛠️ Desarrollo
+
 ```bash
-# Verificar instalación
-python -c "import sdl2; print(sdl2.__version__)"
+# Instalar en modo editable
+pip install -e .
 
-# En Linux, si hay errores de ALSA:
-# El código ya silencia warnings de ALSA automáticamente
+# Ejecutar tests (si los hay)
+pytest tests/
+
+# Perfilado de rendimiento
+python -m cProfile -o profile.stats main.py rom.gb
 ```
 
-### **Error al compilar Cython**
-```bash
-# Verifica que tienes el compilador C instalado
-gcc --version  # Linux/macOS
+---
 
-# En Windows, usa el "x64 Native Tools Command Prompt for VS"
-python setup.py build_ext --inplace
-```
+## [📄 Licencia](LICENSE)
 
-### **Error al cargar módulos después de compilar**
-```bash
-# Si aparece "no module named 'pydmg.cpu'":
-# 1. Verifica que estás en el directorio raíz del proyecto
-# 2. Reinstala las dependencias: pip install -r requirements.txt
-# 3. Recompila de nuevo: python setup.py build_ext --inplace
-# 4. Verifica que se crearon los archivos .so/.pyd en pydmg/
-```
+## 📸 Capturas de Pantalla
 
-### **Audio con chasquidos**
-- Asegurar que `SDL2_AVAILABLE = True` en `pydmg/apu.py`
-- Verificar `BUFFER_SAMPLES = 512` (puede aumentarse si hay lag)
+![Tetris en acción](screenshots/tetris.png)
+*Classic Tetris corriendo a 60 FPS*
 
-### **Render lento**
-- **Solución 1**: Asegúrate de haber compilado los módulos Cython
-- **Solución 2**: Verifica que los archivos `.so` existen en `pydmg/`
-- **Solución 3**: Activa turbo con `Space` o cierra otras aplicaciones
+![Zelda: Link's Awakening](screenshots/zelda.png)
+*The Legend of Zelda: Link's Awakening DX*
 
-## 🤝 Contribuciones
+---
 
-¡Las contribuciones son bienvenidas!
-
-1. Haz fork del repositorio
-2. Crea una rama (`git checkout -b feature/nueva-caracteristica`)
-3. Haz commit de tus cambios (`git commit -am 'Añadir nueva característica'`)
-4. Push a la ranga (`git push origin feature/nueva-caracteristica`)
-5. Abre un Pull Request
-
-**⚠️ Disclaimer**: Este emulador es para fines educacionales y de preservación. Asegúrate de tener los derechos legales sobre las ROMs que utilizas.
+**⭐ Si te gusta este proyecto, ¡dale una estrella en GitHub!**
